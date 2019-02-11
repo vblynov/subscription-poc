@@ -2,12 +2,12 @@ package com.vbl.poc.subscription.processor.core;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class Subscription {
+public class Subscription implements Comparable<Subscription> {
     private final String name;
-    private final String token;
+    private final int token;
     private AtomicBoolean running = new AtomicBoolean(false);
 
-    public Subscription(String name, String token) {
+    public Subscription(String name, int token) {
         this.name = name;
         this.token = token;
     }
@@ -16,7 +16,7 @@ public class Subscription {
         return name;
     }
 
-    public String getToken() {
+    public int getToken() {
         return token;
     }
 
@@ -25,10 +25,27 @@ public class Subscription {
     }
 
     public boolean start() {
-        return running.compareAndSet(false, true);
+        if (running.compareAndSet(false, true)) {
+            System.out.println(String.format("Subscription %s wit token %s is started", name, token));
+            return true;
+        } else {
+            System.out.println(String.format("Subscription %s is already running", name));
+        }
+        return false;
     }
 
     public boolean stop() {
-        return running.compareAndSet(true, false);
+        if (running.compareAndSet(false, true)) {
+            System.out.println(String.format("Subscription %s wit token %s is stopped", name, token));
+            return true;
+        } else {
+            System.out.println(String.format("Subscription %s is already stopped", name));
+        }
+        return false;
+    }
+
+    @Override
+    public int compareTo(Subscription o) {
+        return name.compareTo(o.name);
     }
 }
