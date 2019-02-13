@@ -1,9 +1,12 @@
 package com.vbl.poc.subscription.processor.core;
 
-public class NodeInfo implements Comparable<NodeInfo> {
+import java.io.Serializable;
+
+public class NodeInfo implements Comparable<NodeInfo>, Serializable {
+
     private final String nodeName;
 
-    public NodeInfo(String nodeName) {
+    NodeInfo(String nodeName) {
         this.nodeName = nodeName;
     }
 

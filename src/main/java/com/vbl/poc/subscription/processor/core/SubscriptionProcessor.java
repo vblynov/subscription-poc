@@ -1,15 +1,22 @@
 package com.vbl.poc.subscription.processor.core;
 
 import com.vbl.poc.subscription.processor.zoo.ZookeeperCoordinator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.concurrent.CountDownLatch;
+import java.util.Collection;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
+import java.util.stream.Collectors;
 
 public class SubscriptionProcessor implements Runnable {
+    private static final Logger LOG = LoggerFactory.getLogger(SubscriptionProcessor.class);
+
     private final NodeInfo nodeInfo;
     private final Coordinator coordinator;
     private final SubscriptionRepository subscriptionRepository;
-    private final CountDownLatch shutdownLatch = new CountDownLatch(1);
+    private final CyclicBarrier shutdownLatch = new CyclicBarrier(2);
 
     private ArrayList<Subscription> activeSubscriptions;
 
@@ -21,41 +28,46 @@ public class SubscriptionProcessor implements Runnable {
     }
 
     public void run() {
+        shutdownLatch.reset();
         boolean registered = coordinator.register(nodeInfo, new GroupListener());
         if (registered) {
             try {
                 shutdownLatch.await();
                 coordinator.unregister(nodeInfo);
-            } catch (InterruptedException e) {
+            } catch (InterruptedException | BrokenBarrierException e) {
                 e.printStackTrace();
             }
         }
     }
 
     public void stop() {
-        shutdownLatch.countDown();
+        try {
+            shutdownLatch.await();
+        } catch (InterruptedException | BrokenBarrierException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public String getName() {
+        return nodeInfo.getNodeName();
     }
 
     private class GroupListener implements TopologyListener {
 
         @Override
-        public void nodeAdded(NodeInfo nodeInfo) {
-
-        }
-
-        @Override
-        public void nodeRemoved(NodeInfo nodeInfo) {
-
+        public void topologyChanged(Collection<NodeInfo> nodes) {
+            String nodeGroup = nodes.stream().map(NodeInfo::getNodeName).collect(Collectors.joining(", "));
+            LOG.info("{} observes topology change: {}", nodeInfo.getNodeName(), nodeGroup);
         }
 
         @Override
         public void onRegistered() {
-            System.out.println(String.format("%s : Node registered", nodeInfo.getNodeName()));
+            LOG.info("{} registered", nodeInfo.getNodeName());
         }
 
         @Override
         public void onUnregister() {
-            System.out.println(String.format("%s : Node unregistered", nodeInfo.getNodeName()));
+            LOG.info("{} unregistered", nodeInfo.getNodeName());
         }
     }
 
