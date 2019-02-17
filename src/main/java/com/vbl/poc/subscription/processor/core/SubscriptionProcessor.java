@@ -12,6 +12,9 @@ import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.stream.Collectors;
 
+/**
+ * Processor, which implements subscription distribution according to consistent hashing algorithm
+ */
 public class SubscriptionProcessor implements Runnable {
     private static final Logger LOG = LoggerFactory.getLogger(SubscriptionProcessor.class);
     private static final int DEGREES = 360;
@@ -21,8 +24,7 @@ public class SubscriptionProcessor implements Runnable {
     private final SubscriptionRepository subscriptionRepository;
     private final CyclicBarrier shutdownLatch = new CyclicBarrier(2);
 
-    private ArrayList<Subscription> activeSubscriptions = new ArrayList<>();
-
+    private volatile ArrayList<Subscription> activeSubscriptions = new ArrayList<>();
 
     public SubscriptionProcessor(String nodeName, SubscriptionRepository subscriptionRepository) {
         this.nodeInfo = new NodeInfo(nodeName);
@@ -100,11 +102,12 @@ public class SubscriptionProcessor implements Runnable {
             }
         }
         for (Subscription subscription : toStop) {
-            subscription.stop();
-
+            subscription.stop(nodeInfo.getNodeName());
+            coordinator.unregisterSubscription(subscription);
         }
         for (Subscription subscription : toStart) {
-            subscription.start();
+            coordinator.registerSubscription(subscription);
+            subscription.start(nodeInfo.getNodeName());
         }
         activeSubscriptions = new ArrayList<>(assignedSubscriptions);
         String subs = activeSubscriptions.stream().map(Subscription::getName).collect(Collectors.joining(","));
@@ -123,6 +126,10 @@ public class SubscriptionProcessor implements Runnable {
 
         @Override
         public void onDisconnected() {
+            for (Subscription subscription : activeSubscriptions) {
+                subscription.stop(nodeInfo.getNodeName());
+            }
+            activeSubscriptions = new ArrayList<>();
             LOG.info("{} disconnected", nodeInfo.getNodeName());
         }
     }
