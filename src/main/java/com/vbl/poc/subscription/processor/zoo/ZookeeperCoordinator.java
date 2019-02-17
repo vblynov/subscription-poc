@@ -12,95 +12,67 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class ZookeeperCoordinator implements Coordinator {
+public class ZookeeperCoordinator implements Coordinator, Watcher {
     private static final Logger LOG = LoggerFactory.getLogger(ZookeeperCoordinator.class);
+    private TopologyListener listener;
+    private NodeInfo nodeInfo;
 
     private static final String PARENT = "/servers";
     private static final String ZOOKEEPER_HOST = "localhost:2181";
-    private ZooKeeper zooKeeper;
-    private TopologyListener listener;
-    private AtomicBoolean registered = new AtomicBoolean(false);
 
-    public boolean register(NodeInfo nodeInfo, TopologyListener listener) {
-        this.listener = listener;
-        if (registered.compareAndSet(false, true)) {
+    private volatile ZooKeeper zooKeeper;
+    private AtomicBoolean running = new AtomicBoolean(false);
+
+    public void start(NodeInfo nodeInfo, TopologyListener listener) {
+        if (running.compareAndSet(false, true)) {
+            this.listener = listener;
+            this.nodeInfo = nodeInfo;
             try {
-                CountDownLatch waitForConnection = new CountDownLatch(1);
-                zooKeeper = new ZooKeeper(ZOOKEEPER_HOST, 5000, new ConnectionWatcher(listener, waitForConnection));
-                waitForConnection.await();
-                zooKeeper.getChildren(PARENT, new TopologyWatcher(listener, zooKeeper));
-                zooKeeper.create(PARENT + "/" + nodeInfo.getNodeName(), SerializationUtils.serialize(nodeInfo), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL);
-                listener.onRegistered();
-            } catch (IOException | InterruptedException | KeeperException e) {
-                registered.set(false);
-                e.printStackTrace();
+                zooKeeper = new ZooKeeper(ZOOKEEPER_HOST, 5000, this);
+            } catch (IOException e) {
+                LOG.error("Exception throw ", e);
+                running.set(false);
             }
         }
-        return registered.get();
     }
 
-    public boolean unregister(NodeInfo nodeInfo) {
-        if (registered.compareAndSet(true, false)) {
+    public void stop() {
+        if (running.compareAndSet(true, false)) {
             try {
-                listener.onUnregister();
+                listener.onDisconnected();
                 zooKeeper.close();
             } catch (InterruptedException e) {
-                registered.set(true);
-                e.printStackTrace();
+                LOG.error("Exception thrown ", e);
             }
         }
-        return !registered.get();
     }
 
-    private static class ConnectionWatcher implements Watcher {
-        private final TopologyListener listener;
-        private final CountDownLatch waitConnectionLatch;
-
-        ConnectionWatcher(TopologyListener listener, CountDownLatch waitConnectionLatch) {
-            this.listener = listener;
-            this.waitConnectionLatch = waitConnectionLatch;
-        }
-
-        public void process(WatchedEvent event) {
+    @Override
+    public void process(WatchedEvent event) {
+        try {
             if (event.getType() == Event.EventType.None) {
                 if (event.getState() == Event.KeeperState.SyncConnected) {
-                    waitConnectionLatch.countDown();
-                } else if (event.getState() == Event.KeeperState.Disconnected || event.getState() == Event.KeeperState.Expired) {
-                    listener.onUnregister();
+                    zooKeeper.getChildren(PARENT, this);
+                    zooKeeper.create(PARENT + "/" + nodeInfo.getNodeName(), SerializationUtils.serialize(nodeInfo), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL);
+                } else if (event.getState() == Event.KeeperState.Expired) {
+                    stop();
                 }
-            }
-        }
-    }
-
-    private static class TopologyWatcher implements Watcher {
-        private final TopologyListener listener;
-        private final ZooKeeper zooKeeper;
-
-        TopologyWatcher(TopologyListener listener, ZooKeeper zooKeeper) {
-            this.listener = listener;
-            this.zooKeeper = zooKeeper;
-        }
-
-        @Override
-        public void process(WatchedEvent event) {
-            if (event.getType() == Event.EventType.NodeChildrenChanged) {
-                try {
-                    List<String> nodes = zooKeeper.getChildren(PARENT, this);
-                    List<NodeInfo> groupInfo = new ArrayList<>(nodes.size());
-                    for (String node : nodes) {
-                        NodeInfo nodeInfo = SerializationUtils.deserialize(zooKeeper.getData(PARENT + "/" + node, false, new Stat()));
-                        groupInfo.add(nodeInfo);
-                    }
-                    listener.topologyChanged(groupInfo);
-                } catch (KeeperException.ConnectionLossException | KeeperException.SessionExpiredException ex) {
-                    LOG.debug("Connection lost ", ex);
-                } catch (KeeperException | InterruptedException ex) {
-                    throw new RuntimeException(ex);
+            } else if (event.getType() == Event.EventType.NodeChildrenChanged) {
+                List<String> nodes = zooKeeper.getChildren(PARENT, this);
+                List<NodeInfo> groupInfo = new ArrayList<>(nodes.size());
+                for (String node : nodes) {
+                    NodeInfo nodeInfo = SerializationUtils.deserialize(zooKeeper.getData(PARENT + "/" + node, false, new Stat()));
+                    groupInfo.add(nodeInfo);
                 }
+                listener.topologyChanged(groupInfo);
+
             }
+        } catch (KeeperException.ConnectionLossException | KeeperException.SessionExpiredException ex) {
+            stop();
+        } catch (KeeperException | InterruptedException ex) {
+            LOG.error("Exception thrown {}", ex);
         }
     }
 }
